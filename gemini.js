@@ -5,12 +5,21 @@
 (function () {
   'use strict';
 
-  var MODEL = 'gemini-2.0-flash';
-  var ENDPOINT =
-    'https://generativelanguage.googleapis.com/v1beta/models/' +
-    MODEL +
-    ':generateContent';
-  var TIMEOUT_MS = 6000;
+  // The API retires models aggressively: gemini-2.0-flash and the whole 2.5
+  // line now 404 with "no longer available to new users", pointing at 3.8.
+  // So we try a chain, newest first, and remember whichever one answers.
+  var MODELS = [
+    'gemini-3.8-flash',
+    'gemini-3.7-flash',
+    'gemini-3.6-flash',
+    'gemini-flash-latest',
+    'gemini-3.1-flash-lite'
+  ];
+  var workingModel = null;   // sticky once one succeeds
+  function endpointFor(m) {
+    return 'https://generativelanguage.googleapis.com/v1beta/models/' + m + ':generateContent';
+  }
+  var TIMEOUT_MS = 9000;
 
   /* ---------------------------------------------------------------- config */
 
@@ -83,31 +92,54 @@
         }, TIMEOUT_MS);
       }
 
-      return fetch(ENDPOINT + '?key=' + encodeURIComponent(key), opts)
-        .then(function (res) {
-          if (!res || !res.ok) return null;
-          return res.json();
-        })
-        .then(function (data) {
-          cleanup();
-          try {
-            var out =
-              data &&
-              data.candidates &&
-              data.candidates[0] &&
-              data.candidates[0].content &&
-              data.candidates[0].content.parts &&
-              data.candidates[0].content.parts[0] &&
-              data.candidates[0].content.parts[0].text;
-            return typeof out === 'string' && out.length ? out : null;
-          } catch (e) {
-            return null;
-          }
-        })
-        .catch(function () {
+      // Walk the model chain: 404 means retired, 503 means momentarily
+      // overloaded — both are worth trying the next model for. Anything that
+      // answers becomes sticky so we stop paying for the walk every call.
+      var chain = workingModel ? [workingModel] : MODELS.slice();
+
+      function attempt(i) {
+        if (i >= chain.length) {
           cleanup();
           return null;
-        });
+        }
+        return fetch(endpointFor(chain[i]) + '?key=' + encodeURIComponent(key), opts)
+          .then(function (res) {
+            if (!res) return attempt(i + 1);
+            if (!res.ok) {
+              // a dead or busy model: fall through to the next candidate
+              if (res.status === 404 || res.status === 503 || res.status === 429) {
+                if (workingModel === chain[i]) workingModel = null;
+                return attempt(i + 1);
+              }
+              return null;
+            }
+            return res.json().then(function (data) {
+              var out = null;
+              try {
+                var parts =
+                  data && data.candidates && data.candidates[0] &&
+                  data.candidates[0].content && data.candidates[0].content.parts;
+                if (parts && parts.length) {
+                  out = parts.map(function (p) { return p && p.text ? p.text : ''; }).join('');
+                }
+              } catch (e) {
+                out = null;
+              }
+              if (typeof out === 'string' && out.length) {
+                workingModel = chain[i];
+                return out;
+              }
+              return attempt(i + 1);
+            });
+          })
+          .catch(function () {
+            return attempt(i + 1);
+          });
+      }
+
+      return attempt(0)
+        .then(function (v) { cleanup(); return v; })
+        .catch(function () { cleanup(); return null; });
     } catch (e) {
       cleanup();
       return Promise.resolve(null);
