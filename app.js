@@ -87,6 +87,7 @@ async function boot() {
   DriftCanvas.onClear(() => pushCanvasEvent({ op: "clear" }));
   DriftCanvas.onUndo(() => pushCanvasEvent({ op: "undo", strokes: DriftCanvas.getStrokes() }));
   DriftCanvas.setDrawable(false);
+  wireManualAccept();
 
   const fb = CFG.firebase || {};
   if (!fb.apiKey || fb.apiKey === "PASTE_ME") {
@@ -110,7 +111,17 @@ async function boot() {
 // ---------------------------------------------------------------- join
 async function handleJoin({ name, code }) {
   const clean = (name || "").trim().slice(0, 18) || "player";
-  S.me = { id: uid || rid(), name: clean, emoji: EMOJI[(Math.random() * EMOJI.length) | 0], joinOrder: nowMs() };
+  // Firebase anonymous auth hands every tab in a browser the SAME uid, so
+  // keying players on uid alone makes a second tab overwrite the first
+  // player's doc — and testing in two windows is exactly what people do.
+  // sessionStorage is per-tab, so this stays stable across reloads of this
+  // tab while still being distinct from the tab next to it.
+  let pid = null;
+  try {
+    pid = sessionStorage.getItem("drift_pid");
+    if (!pid) { pid = (uid || "anon") + "-" + rid(); sessionStorage.setItem("drift_pid", pid); }
+  } catch { pid = (uid || "anon") + "-" + rid(); }
+  S.me = { id: pid, name: clean, emoji: EMOJI[(Math.random() * EMOJI.length) | 0], joinOrder: nowMs() };
 
   if (!online) {
     S.code = "SOLO"; S.isHost = true; S.players = [S.me];
@@ -317,18 +328,41 @@ function pushMessage({ kind, body, name, playerId }) {
   addDoc(collection(db, "rooms", S.code, "rounds", S.roundId, "messages"), m).catch(() => {});
 }
 
-// Only the drawer's client judges — one judge, no races, and it's the client
-// that legitimately knows the answer.
+// The drawer AND the host both judge. Originally only the drawer did, which
+// meant a backgrounded or throttled drawer tab silently ignored correct
+// guesses — the round just ran out while the right answer sat in chat. Ending
+// a round is idempotent (the status check below plus the one in endRound), so
+// two judges racing is harmless and far better than zero.
 async function maybeJudge(m) {
   if (!S.round || S.round.status !== "drawing") return;
-  if (S.round.drawerId !== S.me.id) return;
-  if (m.playerId === S.me.id || S.judging) return;
+  const amJudge = S.round.drawerId === S.me.id || S.isHost;
+  if (!amJudge) return;
+  if (m.playerId === S.round.drawerId || S.judging) return;
   S.judging = true;
   try {
+    if (!S.round || S.round.status !== "drawing") return;   // re-check after await points
     const v = await DriftGemini.judgeGuess(S.round.prompt, m.body);
+    if (!S.round || S.round.status !== "drawing") return;
     if (v.correct) await endRound(m.body, m);
     else if (v.close) pushMessage({ kind: "close", body: `${m.body} — so close!`, name: "SYSTEM", playerId: "sys" });
   } finally { S.judging = false; }
+}
+
+// Safety valve: the drawer can tap any guess to accept it (synonyms, inside
+// jokes, anything the matcher is too strict about). Wired on the chat list.
+function wireManualAccept() {
+  const box = document.getElementById("chat-container");
+  if (!box) return;
+  box.addEventListener("click", (ev) => {
+    if (!S.round || S.round.status !== "drawing") return;
+    if (S.round.drawerId !== S.me.id) return;          // only the drawer may accept
+    const el = ev.target.closest("[data-msg-id],[data-id],.msg,.bubble,li");
+    if (!el) return;
+    const name = (el.querySelector("[class*=name]")?.textContent || "").trim();
+    const body = (el.querySelector("[class*=body],[class*=text]")?.textContent || el.textContent || "").trim();
+    if (!body) return;
+    endRound(body.slice(0, 80), { playerId: null, name: name || "someone" });
+  });
 }
 
 // ---------------------------------------------------------------- GEM
@@ -356,6 +390,8 @@ function scheduleGem(r) {
 // ---------------------------------------------------------------- round end
 async function endRound(guess, msg) {
   if (!S.isHost && !(S.round?.drawerId === S.me.id)) return;
+  if (!S.round || S.round.status !== "drawing") return;   // already ended by the other judge
+  S.round = { ...S.round, status: "ending" };            // local latch against a race
   clearTimeout(S.gemHandle);
   const patch = {
     status: "ended",
