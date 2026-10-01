@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#0a0a0f">
+<title>DRIFT — draw it, guess it, watch it drift</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body class="is-guesser">
+
+<div class="bg-layer" aria-hidden="true">
+  <div class="bg-grid"></div>
+  <div class="bg-blob bg-blob-a"></div>
+  <div class="bg-blob bg-blob-b"></div>
+  <div class="bg-blob bg-blob-c"></div>
+  <div class="bg-noise"></div>
+</div>
+
+<canvas id="confetti-canvas" aria-hidden="true"></canvas>
+
+<main id="app">
+
+  <!-- ===================== JOIN ===================== -->
+  <section class="phase phase-join active" id="phase-join" data-phase="join">
+    <div class="attract">
+      <div class="attract-kicker">
+        <span class="dot-live"></span> realtime · draw &amp; guess · 3–10 players
+      </div>
+
+      <h1 class="wordmark" aria-label="DRIFT">
+        <span class="wm-letter" style="--i:0">D</span><span class="wm-letter" style="--i:1">R</span><span class="wm-letter" style="--i:2">I</span><span class="wm-letter" style="--i:3">F</span><span class="wm-letter" style="--i:4">T</span>
+      </h1>
+
+      <p class="attract-tag">
+        One player draws. Everyone guesses. The <em>first correct guess</em>
+        becomes the next word — and if nobody gets it, the chain
+        <strong class="drift-word">drifts</strong> anyway.
+      </p>
+
+      <form class="join-card" id="join-form" autocomplete="off" novalidate>
+        <label class="field">
+          <span class="field-label">Your name</span>
+          <input class="field-input" id="join-name" type="text" maxlength="14" placeholder="e.g. RAVI" spellcheck="false" autocapitalize="characters" required>
+        </label>
+
+        <label class="field">
+          <span class="field-label">Room code <span class="field-opt">optional</span></span>
+          <input class="field-input field-code" id="join-code" type="text" maxlength="4" placeholder="ABCD" spellcheck="false" autocapitalize="characters" inputmode="text">
+        </label>
+
+        <button class="btn btn-primary btn-xl" id="join-btn" type="submit">
+          <span id="join-btn-label">CREATE ROOM</span>
+          <span class="btn-shine" aria-hidden="true"></span>
+        </button>
+
+        <p class="join-hint" id="join-hint">Leave the code blank to start a fresh room.</p>
+      </form>
+
+      <div class="attract-feet">
+        <span class="feet-chip">🎨 draw</span>
+        <span class="feet-chip">💬 guess</span>
+        <span class="feet-chip">🤖 GEM plays too</span>
+        <span class="feet-chip">🌀 chain reveal</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== LOBBY ===================== -->
+  <section class="phase phase-lobby" id="phase-lobby" data-phase="lobby" hidden>
+    <div class="lobby-wrap">
+      <header class="lobby-head">
+        <div class="eyebrow">room code</div>
+        <div class="code-display" id="room-code" aria-live="polite">----</div>
+        <div class="share-row">
+          <code class="share-link" id="share-link">—</code>
+          <button class="btn btn-ghost btn-copy" id="copy-link-btn" type="button">
+            <span class="copy-ico" aria-hidden="true">⧉</span> copy link
+          </button>
+        </div>
+        <p class="lobby-sub">Send the link. Everyone lands straight in this room.</p>
+      </header>
+
+      <section class="lobby-players">
+        <div class="section-title">
+          <span>In the room</span>
+          <span class="count-pill" id="lobby-count">0</span>
+        </div>
+        <div class="roster" id="lobby-roster"></div>
+        <p class="lobby-empty" id="lobby-empty">Waiting for the first brave soul…</p>
+      </section>
+
+      <div class="lobby-rules">
+        <div class="rule"><b>1</b> A secret word goes to one drawer.</div>
+        <div class="rule"><b>2</b> Everyone else guesses in live chat.</div>
+        <div class="rule"><b>3</b> First correct guess becomes the next word.</div>
+        <div class="rule"><b>4</b> Nobody got it? The last wrong guess carries on.</div>
+      </div>
+
+      <div class="lobby-actions">
+        <button class="btn btn-primary btn-xl" id="start-btn" type="button">
+          START GAME <span class="btn-shine" aria-hidden="true"></span>
+        </button>
+        <p class="lobby-hint" id="lobby-hint">Host starts when everyone's in.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ===================== PLAY ===================== -->
+  <section class="phase phase-play" id="phase-play" data-phase="play" hidden>
+    <header class="play-top">
+      <div class="play-top-left">
+        <span class="mini-mark">DRIFT</span>
+        <span class="round-info" id="round-info">ROUND 1 / 1</span>
+      </div>
+
+      <div class="timer" id="timer">
+        <svg class="timer-ring" viewBox="0 0 64 64" aria-hidden="true">
+          <circle class="ring-track" cx="32" cy="32" r="26"></circle>
+          <circle class="ring-arc" id="timer-arc" cx="32" cy="32" r="26"></circle>
+        </svg>
+        <span class="timer-num" id="timer-num">—</span>
+      </div>
+
+      <div class="play-top-right">
+        <button class="btn btn-danger btn-sm" id="end-btn" type="button">END &amp; REVEAL</button>
+      </div>
+    </header>
+
+    <div class="prompt-banner" id="prompt-banner">
+      <div class="banner-label" id="banner-label">GUESS IT</div>
+      <div class="banner-body">
+        <div class="prompt-word" id="prompt-word" hidden></div>
+        <div class="prompt-mystery" id="prompt-mystery"><span class="qmark">?</span></div>
+      </div>
+    </div>
+
+    <div class="roster roster-strip" id="play-roster"></div>
+
+    <div class="play-grid">
+      <div class="stage-col">
+        <div class="canvas-shell">
+          <canvas id="drift-canvas" width="1000" height="1000"></canvas>
+          <div class="canvas-watch" id="canvas-watch">watching the drawer…</div>
+        </div>
+
+        <div class="tool-bar" id="tool-bar"></div>
+        <div class="status-line" id="status-line">waiting for players…</div>
+      </div>
+
+      <aside class="chat-col">
+        <div class="chat-head">
+          <span>LIVE GUESSES</span>
+          <span class="gem-tag">🤖 GEM is in</span>
+        </div>
+        <div id="chat-container"></div>
+        <div class="reaction-bar" id="reaction-bar"></div>
+      </aside>
+    </div>
+  </section>
+
+  <!-- ===================== REVEAL ===================== -->
+  <section class="phase phase-reveal" id="phase-reveal" data-phase="reveal" hidden>
+    <div class="reveal-wrap" id="reveal-wrap"></div>
+  </section>
+
+</main>
+
+<!-- overlays -->
+<div class="flash-overlay" id="flash-overlay" aria-hidden="true">
+  <div class="flash-card" id="flash-card">
+    <div class="flash-kicker" id="flash-kicker"></div>
+    <div class="flash-main" id="flash-main"></div>
+    <div class="flash-sub" id="flash-sub"></div>
+  </div>
+</div>
+
+<div class="screen-flash" id="screen-flash" aria-hidden="true"></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<!-- config first: gemini.js and app.js both read window.DRIFT_CONFIG -->
+<script src="config.js"></script>
+<script src="ui.js"></script>
+<script src="canvas.js"></script>
+<script src="gemini.js"></script>
+<script src="chat.js"></script>
+<script type="module" src="app.js"></script>
+</body>
+</html>
