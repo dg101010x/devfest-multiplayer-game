@@ -837,6 +837,20 @@
     var duration = Math.max(120, num(opts.duration, DEFAULT_REPLAY_MS));
     var start = (window.performance ? performance.now() : Date.now());
 
+    // requestAnimationFrame does not fire in a backgrounded tab, so an animated
+    // replay started there would never paint and the player would come back to
+    // a blank filmstrip. Draw the finished art immediately instead.
+    function paintFinal() {
+      wipe();
+      for (var z = 0; z < list.length; z++) drawStroke(ctx, list[z], W, H);
+      handle.done = true;
+      if (onDone) safe(onDone);
+    }
+    if (document.hidden) {
+      paintFinal();
+      return handle;
+    }
+
     // progress is measured in "segments drawn" across the whole drawing, so
     // long strokes take proportionally longer — it reads like real drawing.
     var drawnSi = 0;   // index of stroke currently being drawn
