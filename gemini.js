@@ -8,12 +8,15 @@
   // The API retires models aggressively: gemini-2.0-flash and the whole 2.5
   // line now 404 with "no longer available to new users", pointing at 3.8.
   // So we try a chain, newest first, and remember whichever one answers.
+  // Ordered by what actually answers today, not by version number:
+  // 3.8/3.7/3.6-flash are persistently 503 ("high demand"), and the 2.0/2.5
+  // line 404s as retired. 3.1-flash-lite is verified working and fast.
   var MODELS = [
+    'gemini-3.1-flash-lite',
+    'gemini-3-flash-preview',
+    'gemini-flash-lite-latest',
     'gemini-3.8-flash',
-    'gemini-3.7-flash',
-    'gemini-3.6-flash',
-    'gemini-flash-latest',
-    'gemini-3.1-flash-lite'
+    'gemini-flash-latest'
   ];
   var workingModel = null;   // sticky once one succeeds
   function endpointFor(m) {
@@ -38,16 +41,37 @@
   }
 
   function isEnabled() {
-    return !!getKey();
+    // True if we have a direct key OR we can reach our serverless proxy.
+    // Every call path degrades to local behaviour anyway, so an optimistic
+    // yes here just means GEM gets scheduled and may speak.
+    return !!getKey() || typeof fetch === 'function';
   }
 
   /* ------------------------------------------------------------- transport */
 
   // Returns the model's text, or null on any failure. Never throws.
+  // No client-side key? Ask our own serverless proxy, which holds the key in
+  // an env var. Returns null on any failure so callers fall back to local
+  // behaviour exactly as they would without Gemini at all.
+  function callViaProxy(text, genConfig) {
+    if (typeof fetch !== 'function') return Promise.resolve(null);
+    return fetch('/api/gemini', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: String(text), generationConfig: genConfig || {} })
+    })
+      .then(function (r) { return r && r.ok ? r.json() : null; })
+      .then(function (d) {
+        var t = d && d.text;
+        return typeof t === 'string' && t.length ? t : null;
+      })
+      .catch(function () { return null; });
+  }
+
   function callGemini(text, genConfig) {
     var key = getKey();
-    if (!key) return Promise.resolve(null);
     if (typeof fetch !== 'function') return Promise.resolve(null);
+    if (!key) return callViaProxy(text, genConfig);
 
     var controller = null;
     var timer = null;

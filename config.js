@@ -12,5 +12,5 @@ window.DRIFT_CONFIG = {
     appId: "1:1006204358073:web:c50341a296927d31507a68",
     measurementId: "G-Q4R4RSGS9V",
   },
-  geminiKey: "PASTE_ME",
+  geminiKey: ""  // served by /api/gemini (Vercel env var) — never commit a real key,
 };
